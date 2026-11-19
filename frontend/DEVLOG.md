@@ -7,6 +7,255 @@ every placeholder value, what was deliberately deferred.
 
 ---
 
+## 2026-11-19 — 企劃驗收 review of Step 3 (PASS) + 1 cosmetic fix
+
+Independent reviewer checked the UI layer against GDD §1–§4 terminology/
+labeling rules (獎金遊戲 not 免費遊戲; pitcher-only 保底額度 vs batter-only
+生命值, mutually exclusive by data shape; "stays on same opponent" copy on
+`failure_life_used`; Wild expand never implying a bigger win; Scatter never
+implying a payout; base-score/multiplier breakdown kept separate) and
+against the mock-RGS event contract (every event type has a real handler
+with a tested unhandled-event fallback; `endRound()` zero-win skip is a real
+conditional, not just a devlog claim; debug-force controls are genuinely
+wired end-to-end). **Verdict: all MATCH, no deviations.**
+
+One low-severity cosmetic nit was flagged and fixed: the scrolling pitch-log
+line (`GameCanvas.svelte`, below the large call-out text) was printing the
+raw `outcome` event field untranslated (e.g. `failure_life_used`) even
+though the large call-out above it already used a Chinese label map. Fixed
+by hoisting that map to a module-level `PITCH_OUTCOME_LABEL` constant and
+using it in both places, so the raw English/snake_case value can never leak
+into player-facing copy. Verified live in a browser (forced `batter` mode,
+`scatterCount: 4`, `pitchOutcomes: [0,1,1,1,1,1,1]`): the log now reads
+"#1 對手1：失敗（扣1生命值，留在原地）" instead of the raw event string.
+Full suite re-run after the fix: `6 passed (6 files), 58 passed (58 tests)`;
+`pnpm run build` unaffected (883 modules, no warnings).
+
+---
+
+## 2026-11-19 — Step 3: playable UI (Svelte 5 + PixiJS 8) on top of the mock RGS
+
+Built the actual playable front-end that calls `mockRgs` and plays back its
+`events` array visually. Placeholder art only (colored rectangles + text
+labels) — no final art, per the task brief. **No logic bugs found in
+`mockRgs/*` while building this** — the files under `src/lib/mockRgs/` were
+read but not modified, as instructed.
+
+### Files added
+
+- `src/lib/player/roundPlayer.svelte.js` — **the event-stepping state
+  machine**. A plain class (`RoundPlayer`) using Svelte 5 runes (`$state` /
+  `$state.raw`) so it's reactive without being a component. Owns "what event
+  are we on, when do we advance" and exposes derived display state (grid,
+  wildCells, highlighted winning symbols, duel/feature state — opponents
+  array, pitch log, guaranteed-slots/lives counters, feature-end summary,
+  round result). Deliberately has **zero PixiJS/DOM code** — this is the
+  seam the task brief asked for, so a future reskin only touches the
+  renderer. Every event type in the documented contract
+  (`spin_result`/`base_game_win`/`scatter_trigger`/`pitch`/
+  `opponent_cleared`/`feature_end`/`round_result`) has a real `case` in
+  `_applyEvent`; anything else hits a `default` branch that `console.warn`s
+  and records into `unhandledEvents` rather than silently dropping it.
+  Also exposes `skipToEnd()` (process every remaining event synchronously,
+  no animation) — used both as a QA "fast forward" button in the UI and as
+  the backbone of the automated test below.
+- `src/lib/gameController.svelte.js` — top-level game state (`GameController`
+  class). The **only** place that imports and calls into `mockRgs`
+  (`authenticate()` once on `init()`, `play()` on spin, `endRound()` after
+  playback finishes). Converts the fixed-point integer money mockRgs returns
+  into human display units at this boundary — nothing downstream ever sees
+  the ×1,000,000 integers. Owns balance/bet/mode selection, builds the
+  `debugForce` object from the debug panel's fields, and enforces the
+  endRound rule for real: `endRound()` is only called when
+  `totalWinMultiplier > 0`, wired against the actual round result, not
+  skipped because the mock is a no-op.
+- `src/lib/pixi/symbolDisplay.js` — symbol id → {label, fill color, text
+  color} lookup. All ten symbols (`WILD`/`SCATTER`/`HIGH_OPP3`/`HIGH_OPP2`/
+  `HIGH_OPP1`/`HIGH_BAT`/`LOW_JERSEY`/`LOW_GLOVE`/`LOW_BASE`/`LOW_CAP`) get a
+  distinct color + short label. Swap this file wholesale once real art
+  exists.
+- `src/lib/pixi/GameCanvas.svelte` — the PixiJS rendering layer. One
+  `PIXI.Application` (v8 async `init()` pattern), three stacked containers
+  (grid / duel-feature / round-result-banner), each rebuilt from scratch on
+  the relevant slice of `roundPlayer` state via `$effect`. Covers:
+  - 5×5 base-game grid: colored cell per symbol, winning symbols (from
+    `base_game_win` events) get a white highlight border, Wild cells get a
+    rounded border plus a "單格"/"整軸" tag under the label so `form` is
+    visually distinguishable (cosmetic only, per spec — never implies a
+    scoring difference).
+  - On `scatter_trigger`: the grid is replaced (not overlaid) by a duel
+    scene — mode banner (投手/打手), the scatter-count-derived parameter
+    (保底額度 / 生命值) with its live remaining count, and 3 opponent boxes
+    labeled per the GDD's "對手貓" framing, color-coded pending/current
+    (yellow)/cleared (green)/failed (red).
+  - `pitch` events: a large call-out line for the latest pitch (which
+    opponent, outcome in plain language — 保底成功/成功/失敗/失敗＋扣生命值)
+    plus a scrolling log of the last 6 pitches; batter mode also shows the
+    current opponent's running hit count (X/2).
+  - `opponent_cleared`: that opponent's box flips to green and shows its
+    banked base score + drawn multiplier directly in the box.
+  - `feature_end`: a bordered summary panel — endReason (full clear /
+    early termination, in Chinese + English), banked base total, every
+    drawn multiplier, and the resulting final multiplier.
+  - `round_result`: a prominent banner at the bottom of the canvas — total
+    win as both multiplier and amount (or "本局無贏分" when it's a 0x
+    round).
+- `src/lib/components/ModeSwitch.svelte`, `BetPanel.svelte`,
+  `DebugPanel.svelte` — the Svelte chrome. `ModeSwitch` reads `authenticate()`'s
+  `modes` array (never hardcoded) and disables switching mid-round.
+  `BetPanel` reads `betLevels` the same way, shows balance, the Spin/Skip
+  buttons, and the last round's result. `DebugPanel` is the "test RNG" QA
+  panel — collapsible, exposes `debugForce.scatterCount` (0/3/4/5 dropdown),
+  `debugForce.seed` (free text), and `debugForce.pitchOutcomes` (comma list,
+  `1/0` or `s/f`), and echoes back the `debugForceApplied` actually used on
+  the last round for sanity-checking.
+- `src/App.svelte` — replaced the untouched create-vite starter page.
+  Wires everything together, adds the `window` keydown listener for
+  spacebar-spin (platform guide §4.3), and a mute-all-sound toggle.
+- `frontend/tests/roundPlayer.test.js` — new vitest suite for the player
+  state machine (see "Testing" below).
+- `frontend/.claude/launch.json` was **not** created inside `frontend/` or
+  `baseball-cat/` — the Claude Code preview tool in this session resolved
+  its config one directory level up, at `遊戲企劃/.claude/launch.json`
+  (outside this project's own folder). Noting this here since it's an odd
+  location or a side-effect of the agent environment's project context,
+  not a standard web project file; a human engineer just running
+  `pnpm --dir frontend run dev` directly won't need it at all.
+
+### Judgment calls
+
+- **PixiJS owns all of the game-state visuals, not just the grid.** The task
+  brief lists the duel/feature playback under the "Game canvas (PixiJS)"
+  header, so the opponent boxes, pitch log, feature-end summary, and
+  round-result banner are all drawn as PixiJS Graphics/Text inside the
+  canvas rather than as a separate DOM/HTML overlay. This is more code than
+  a DOM overlay would have been, but keeps everything "the canvas" in one
+  place and matches what was asked.
+- **Full-scene rebuild on each relevant state change**, not incremental
+  diffing or a continuous animation loop. Each of the three `$effect`s
+  clears its container's children and redraws from the current
+  `roundPlayer` state. This is simple and correct for a prototype at this
+  event volume (at most ~15 events/round); a real polish pass would almost
+  certainly want persistent sprites with actual tweened transitions instead
+  of rebuild-on-every-event.
+- **Grid is hidden (not dimmed/overlaid) during the duel feature** — a
+  clean scene swap felt like a clearer "you're now in a different mode"
+  signal than layering the duel UI on top of the 5×5 grid, which would be
+  visually busy and isn't how the GDD describes the transition anyway
+  ("獎金遊戲" is a distinct phase, not a reel modifier).
+- **Optimistic balance deduction**: the bet is subtracted from `balance`
+  the instant `spin()` is called (before any animation plays), and any win
+  is credited only after the full event log finishes playing + `endRound()`
+  fires. This mirrors "final win must accumulate to the final amount" from
+  the platform guide applied at the whole-round granularity, since mockRgs
+  hands back the complete pre-computed result up front rather than
+  streaming partial wins.
+- **`skipToEnd()` / the "快轉 Skip" button**: not asked for explicitly, but
+  added because manually waiting through a full pitcher full-clear (9
+  pitches × 700ms + banners) during QA/iteration was slow; it's also what
+  the automated test below uses to avoid relying on real timers.
+- **Mute toggle has no audio to mute** — there's no audio engine in this
+  project yet at all. Added the toggle + `muted` state in `App.svelte` as a
+  structural placeholder only, per the brief's "structure for one" guidance,
+  so wiring up real sound later doesn't require a UI change.
+- **Autoplay was not built.** The brief says "if you add it" — decided not
+  to, to keep this pass focused; the platform guide's "autoplay needs a
+  confirm step" rule is noted here for whoever adds it later.
+- **`app.css` (the original create-vite stylesheet) was left in place
+  as-is**, not deleted or rewritten. It still sets `body { display: flex;
+  place-items: center; min-height: 100vh }` and `#app { max-width: 1280px;
+  padding: 2rem; text-align: center }`, which do interact with
+  `App.svelte`'s own layout (that's part of why the app renders centered
+  with some outer padding in the screenshots). It didn't visibly break
+  anything so it was left alone rather than risk an unrelated regression,
+  but a real polish pass should probably replace it with a clean reset.
+- **`src/lib/Counter.svelte`** (the create-vite starter's demo component) is
+  now unused — `App.svelte` no longer imports it — but was left in the repo
+  rather than deleted, since removing files wasn't necessary for this task.
+
+### What was skipped / deferred (platform-guide compliance gaps, flagged per the brief)
+
+Per the brief, chased "cheap to do now" items (mode switch via authenticate,
+bet levels via authenticate, spacebar spin, balance display, mute toggle
+structure) but explicitly did **not** chase:
+- Popout sizing (400×225 / 800×450) and the 1024×576 laptop target — canvas
+  is a fixed 960×700 placeholder size, not responsive/scaled to those
+  targets yet.
+- Multi-currency formatting (JPY 0-decimals, BTC 6-decimals, sub-$0.01
+  display) — `toFixed(2)` everywhere regardless of `currency`.
+- Social mode (`social=true`) word-filter compliance — UI copy freely uses
+  "Bonus Game" etc. without checking the restricted-word list; the GDD
+  already confirms "bonus" alone is fine, but no systematic check was done.
+- Replay (`replay=true`) support.
+- Full rules/info page (payout tables, RTP, max win, per-button
+  instructions, disclaimers) — none of that page exists yet.
+- "成本 > 2× 的模式必須先確認" — moot right now since both modes are 1.0×,
+  but noting the rule exists for whenever that changes.
+- Loading-time / bundle-size optimization — not measured.
+
+### Testing
+
+- `pnpm run build` — **succeeds**, 883 modules transformed, no warnings, no
+  errors (confirmed twice: once before the canvas-height tweak below, once
+  after).
+- `pnpm test` — **58/58 passing** (the pre-existing 54 mockRgs-layer tests,
+  untouched and still green, plus **4 new tests** in
+  `tests/roundPlayer.test.js` covering: a non-triggering round, a
+  pitcher-mode forced full-clear, a batter-mode forced early-termination,
+  and an explicit assertion that every event type documented in
+  `mockRgs/index.js`'s header contract actually appears in a `play()` result
+  and gets consumed by `RoundPlayer` with zero entries landing in
+  `unhandledEvents`. These tests use `skipToEnd()` (synchronous), not
+  `start()`, specifically to avoid depending on real timers.
+- **Visually confirmed, not just reasoned through** — ran the actual dev
+  server (`pnpm --dir frontend run dev`, Vite default port 5173) in this
+  session's browser pane and drove it directly:
+  - Forced `scatterCount=5` + 7 forced successful pitch outcomes in pitcher
+    mode → watched the scatter-trigger transition, all 3 opponent boxes
+    clear green with correct base-score/multiplier text, the feature-end
+    summary panel (banked base 4, multipliers ×1.2/×1/×1.5, final 7.20×),
+    and the round-result banner (7.50× / 7.50 USD) all render correctly;
+    balance updated 1000.00 → 999.00 (bet) → 1006.50 (bet + win credited
+    after playback finished).
+  - Spacebar-triggered a normal (non-forced) spin in base game — grid
+    rendered with per-symbol colors/labels, a real ways-win highlighted and
+    reported (`BASE x5 (4 ways) = 1.60x`), round-result banner showed
+    correctly below it with no overlap (see canvas-height fix below).
+  - Forced `scatterCount=4` + two forced failures in **batter** mode →
+    watched opponent 1 take a `failure_life_used` (life 1→0) then a
+    `failure` (life pool exhausted) → correctly shown as red "未過關（淘汰）",
+    opponents 2/3 stayed pending/gray, feature-end summary showed
+    `early_termination` with 0 banked base and no multipliers.
+  - Confirmed the debug panel's scatterCount/seed/pitchOutcomes fields are
+    real `<select>`/`<input>` elements wired to `controller`, not stubs.
+- **One cosmetic bug found and fixed during this same visual pass**: the
+  round-result banner (anchored near the bottom of the fixed-height canvas)
+  could overlap the base game's win-summary text line when a base-game win
+  text was long enough. Fixed by increasing `GameCanvas.svelte`'s `HEIGHT`
+  constant from 640 to 700 (the banner's Y positions are all
+  `HEIGHT`-relative, so this alone gave enough clearance) — reconfirmed
+  overlap gone with a follow-up spin in the browser.
+- **Not verified**: real mobile/touch layout, popout window sizes, anything
+  under multi-currency formatting, or long-run visual stability across many
+  consecutive spins (only did a handful of manual spins in one session).
+
+### How to run it
+
+```bash
+cd frontend
+pnpm run dev      # Vite dev server, http://localhost:5173/ by default
+pnpm run build    # production build -> frontend/dist/
+pnpm test         # vitest, mockRgs tests + roundPlayer tests
+```
+
+No new dependencies were added — still just `pixi.js` (already present) and
+Svelte 5's built-in runes (used in a `.svelte.js` module for the player
+state machine and the game controller; `vite-plugin-svelte` already
+compiles `.svelte.js`/`.svelte.ts` files, confirmed by a clean `pnpm run
+build`).
+
+---
+
 ## 2026-11-19 — PM decision on the review's 2 open risk items, both now fixed structurally
 
 The PM decided both open items from the review below, as permanent GDD rules
