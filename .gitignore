@@ -2,3 +2,8 @@ __pycache__/
 *.pyc
 .DS_Store
 Thumbs.db
+
+# frontend/ (Svelte+Vite+PixiJS project) has its own .gitignore too,
+# but keep node_modules/dist out even if that file is ever removed.
+frontend/node_modules/
+frontend/dist/
