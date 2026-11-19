@@ -4,7 +4,7 @@ Stake Engine 平台 SLOT 遊戲企劃案。與另一款賽博龐克題材的專�
 
 ## 目前狀態（2026-11-19）
 
-**企劃階段：D1/D2/D4/D6 已定案，D3 暫定、D5 待數學階段。前端：已有一版可互動的初版（Step 1–4 全部完成，兩輪企劃驗收通過），所有數值仍是假的佔位值。** 接手這個專案（企劃/PM/前端/QA 任何角色）請先看 **[`docs/02_Engineering/HANDOFF.md`](docs/02_Engineering/HANDOFF.md)**——現況、怎麼跑起來、架構、換真RGS的方法、所有佔位值清單都整理在那裡。
+**企劃階段：D1/D2/D4/D6 已定案，D3 暫定、D5 待數學階段。前端：第一版介面被打回票（排版/轉輪動畫不符合老虎機規格），企劃已補寫完整介面/互動規格書，前端將照規格書重做。** 接手這個專案（企劃/PM/前端/QA 任何角色）請先看 **[`docs/02_Engineering/HANDOFF.md`](docs/02_Engineering/HANDOFF.md)**（現況/怎麼跑/架構/換真RGS方法）跟 **[`docs/01_Design/UI_INTERACTION_SPEC_v1.md`](docs/01_Design/UI_INTERACTION_SPEC_v1.md)**（介面版面/狀態機/互動規格，前端開發的對照基準）。
 
 已定案（細節見 GDD 第 1–6 節）：
 - 畫風：美式 Q 版貓咪，成人向吉祥物調性（否決過「愛麗絲夢遊仙境」方案，兒童角色＋既有遊戲近似風險過高）
